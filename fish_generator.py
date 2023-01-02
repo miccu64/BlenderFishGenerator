@@ -31,7 +31,7 @@ def rule54_find(x: int, y: int, z: int) -> int:
 
 def rule54_gen():
     ops.object.mode_set(mode='EDIT')
-    dims = 111
+    dims = 144
     values = np.zeros([dims, dims])
     for x in range(dims):
         values[x][0] = random.randint(0, 1)
@@ -110,7 +110,7 @@ def solidify(mesh_name: str, width: float):
     #kolorowanie
     ob = context.active_object
     mat = data.materials.new(name="Colour")
-    mat.diffuse_color = [random.random(), random.random(), random.random(), random.random()]
+    mat.diffuse_color = [random.random(), random.random(), random.random(), 1]
     ob.data.materials.append(mat)
     
 
@@ -318,12 +318,27 @@ def generate_side_fins(length: float, height: float, width: float):
     
 
 def delete_all_from_scene():
-    for bpy_data_iter in (
-            data.objects,
-            data.meshes
-    ):
+    # Select objects by type
+    ops.object.mode_set(mode='OBJECT')
+    for o in context.scene.objects:
+        if o.type == 'MESH':
+            o.select_set(True)
+        else:
+            o.select_set(False)
+    # Call the operator only once
+    ops.object.delete()
+    
+    for bpy_data_iter in (data.objects, data.meshes):
         for id_data in bpy_data_iter:
             bpy_data_iter.remove(id_data)
+    # iterate over all images in the file
+    for image in data.images:
+        # don't do anything if the image has any users.
+        if image.users:
+            continue
+        # remove the image otherwise
+        data.images.remove(image)
+            
             
 def dump(obj, level=0):
    for attr in dir(obj):
@@ -331,6 +346,7 @@ def dump(obj, level=0):
            print( "obj.%s = %s" % (attr, getattr(obj, attr)))
        else:
            print( attr )
+
 
 delete_all_from_scene()
 
@@ -341,12 +357,8 @@ generate_upper_fin(4, 5, 5)
 generate_side_fins(2, 2, 1)
 
 
-#shells = rule54_gen()
-
-
 ops.object.mode_set(mode='OBJECT')
 ops.object.select_all(action='DESELECT')
-
 
 context.view_layer.objects.active = data.objects["Corpus Mesh"]
 ob = context.object
@@ -371,15 +383,18 @@ i=0
 for face in bm.faces:
     face.select = True
     mat = data.materials.new(name="Colour")
-    #mat.diffuse_color = [random.random(), random.random(), random.random(), random.random()]
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
     texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
     texImage.image = rule54_gen()
     mat.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
+    # uwydatnienie kolorów
+    mat.node_tree.nodes['Image Texture'].projection = 'BOX'
+    mat.node_tree.nodes['Image Texture'].interpolation = 'Closest'
     ob.data.materials.append(mat)
     context.object.active_material_index=i
     ops.object.material_slot_assign()
+    ops.uv.cube_project()
     i += 1
     face.select = False
 
@@ -387,4 +402,3 @@ for face in bm.faces:
 
 bmesh.update_edit_mesh(me)
 
-rule54_gen()
