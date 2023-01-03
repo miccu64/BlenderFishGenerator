@@ -3,11 +3,18 @@ from mathutils import Vector
 import random
 import numpy as np
 import bmesh
+import copy
+import math
 
 # dane potrzebne do miejsca generowania innych elementów
 corpus_length = 10.
 corpus_height = 5.
 corpus_width = 5.
+
+# dane do funkcji dopasowania
+fit_shells = 0
+all_shells = 0
+roundness_ratio = 0
 
 
 # reguła 30, reguła 54 - do generowania łusek
@@ -29,9 +36,21 @@ def rule54_find(x: int, y: int, z: int) -> int:
     return 0
 
 
+# określenie czy kolor jest ciemny na podstawie HSP http://alienryderflex.com/hsp.html
+def hsp_is_dark(color) -> bool:
+    r = color[0] * 255
+    g = color[1] * 255
+    b = color[2] * 255
+    hsp = math.sqrt(0.299 * (r * r) + 0.587 * (g * g) + 0.114 * (b * b))
+    return hsp <= 127.5
+
+
 def rule54_gen():
+    global fit_shells, all_shells
+    
     ops.object.mode_set(mode='EDIT')
     dims = 144
+    all_shells += dims * dims
     values = np.zeros([dims, dims])
     for x in range(dims):
         values[x][0] = random.randint(0, 1)
@@ -48,13 +67,19 @@ def rule54_gen():
     
     color1 = [random.random(), random.random(), random.random(), 1]
     color2 = [1-color1[0], 1-color1[1], 1-color1[2], 1]
+    color1_dark = hsp_is_dark(color1)
+    color2_dark = hsp_is_dark(color2)
     
     for y in range(dims):
         for x in range(dims):
             if values[x][y] == 1:
                 pixels[(x * dims) + y] = color1
+                if color1_dark == True:
+                    fit_shells += 1
             else:
                 pixels[(x * dims) + y] = color2
+                if color2_dark == True:
+                    fit_shells += 1
                 
     # spłaszczam listę
     pixels = [item for sublist in pixels for item in sublist]
@@ -119,6 +144,10 @@ def draw_point_type() -> str:
     return random.choice(['FREE', 'VECTOR', 'ALIGNED', 'AUTO'])
 
 
+def draw_point_type_weighted() -> str:
+    return random.choices(['FREE', 'VECTOR', 'ALIGNED', 'AUTO'], weights=(0.2, 0.2, 0.2, 0.4), k=1)[0]
+
+
 def generate_corpus(length: float, height: float, width: float):
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
@@ -127,9 +156,18 @@ def generate_corpus(length: float, height: float, width: float):
     curve.name = 'Corpus Curve'
     bez_points = curve.data.splines[0].bezier_points
 
+    round_type = 0
     for bez_point in bez_points:
-        bez_point.handle_left_type = draw_point_type()
-        bez_point.handle_right_type = draw_point_type()
+        bez_point.handle_left_type = draw_point_type_weighted()
+        bez_point.handle_right_type = draw_point_type_weighted()
+        if bez_point.handle_left_type == 'AUTO':
+            round_type += 1
+        if bez_point.handle_right_type == 'AUTO':
+            round_type += 1
+            
+    # obliczam stosunek okrągłości
+    global roundness_ratio
+    roundness_ratio = round_type / 8
 
     proportions = random.uniform(1.3, 8.9)
 
@@ -164,6 +202,10 @@ def generate_corpus(length: float, height: float, width: float):
 
 
 def generate_tail(length: float, height: float, width: float, indentation: float):
+    global corpus_width
+    if corpus_width < width:
+        width = corpus_width
+        
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
@@ -201,8 +243,12 @@ def generate_tail(length: float, height: float, width: float, indentation: float
 
 
 def generate_upper_fin(length: float, height: float, width: float):
-    if width > corpus_width:
+    global corpus_width, corpus_height
+    if corpus_width < width:
         width = corpus_width - 2
+    if corpus_height > height:
+        height = corpus_height + 2
+    
 
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
@@ -274,10 +320,15 @@ def generate_eyes():
     bez_points[3].handle_left = Vector((x_center + 1, y_center - 1, 0.0))
     bez_points[3].handle_right = Vector((x_center - 1, y_center - 1, 0.0))
 
-    solidify('Eyes Mesh', corpus_width + 2)
+    global corpus_width
+    solidify('Eyes Mesh', corpus_width + 4)
 
 
 def generate_side_fins(length: float, height: float, width: float):
+    global corpus_width
+    if corpus_width > height:
+        height = corpus_width + 2
+        
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
@@ -285,8 +336,8 @@ def generate_side_fins(length: float, height: float, width: float):
     bez_points = curve.data.splines[0].bezier_points
 
     for bez_point in bez_points:
-        bez_point.handle_left_type = draw_point_type()
-        bez_point.handle_right_type = draw_point_type()
+        bez_point.handle_left_type = 'AUTO'
+        bez_point.handle_right_type = 'AUTO'
 
     x = random.uniform(-2 * corpus_length / 3, -corpus_length / 4)
     x2 = x
@@ -314,7 +365,77 @@ def generate_side_fins(length: float, height: float, width: float):
     bez_points[3].handle_left = Vector((x2 - 1, y, height))
     bez_points[3].handle_right = Vector((x2 + 1, y, height))
 
+    # trzeba zrobić kopię, gdyż dane się gubiły po solidify
+    vectors = []
+    for bez_point in bez_points:
+        vectors.append(copy.copy(bez_point.co))
+        vectors.append(copy.copy(bez_point.handle_left))
+        vectors.append(copy.copy(bez_point.handle_right))
+    
     solidify('Left Fin Mesh', width)
+    
+    # utworzenie krzywej
+    ops.curve.primitive_bezier_circle_add(enter_editmode=True)
+    curve = context.active_object
+    curve.name = 'Right Fin Curve'
+    mirrored_bez_points = curve.data.splines[0].bezier_points
+    
+    for p in range(len(mirrored_bez_points)):
+        mirrored_bez_points[p].handle_left_type = 'AUTO'
+        mirrored_bez_points[p].handle_right_type = 'AUTO'
+        point = vectors[p * 3]
+        mirrored_bez_points[p].co = Vector((point.x, point.y, -point.z))
+        point = vectors[p * 3 + 1]
+        mirrored_bez_points[p].handle_left = Vector((point.x, point.y, -point.z))
+        point = vectors[p * 3 + 2]
+        mirrored_bez_points[p].handle_right = Vector((point.x, point.y, -point.z))
+
+    solidify('Right Fin Mesh', width)
+    
+    
+def generate_shells(mesh_name: str):
+    ops.object.mode_set(mode='OBJECT')
+    ops.object.select_all(action='DESELECT')
+
+    context.view_layer.objects.active = data.objects[mesh_name]
+    ob = context.object
+    me = ob.data
+    # nowy mesh
+    bm = bmesh.new()
+    # wczytanie mesha
+    bm.from_mesh(me)
+    # podział na więcej ścian
+    #bmesh.ops.subdivide_edges(bm,edges=bm.edges,cuts=1,use_grid_fill=True)
+    # zapisanie spowrotem
+    bm.to_mesh(me)
+    me.update()
+
+    ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(me)
+    bm.faces.ensure_lookup_table()
+    # ustawienie face select mode
+    #context.tool_settings.mesh_select_mode = [False, False, True]
+
+    i=0
+    for face in bm.faces:
+        face.select = True
+        mat = data.materials.new(name="Colour")
+        mat.use_nodes = True
+        bsdf = mat.node_tree.nodes["Principled BSDF"]
+        texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
+        texImage.image = rule54_gen()
+        mat.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
+        # uwydatnienie kolorów
+        mat.node_tree.nodes['Image Texture'].projection = 'BOX'
+        mat.node_tree.nodes['Image Texture'].interpolation = 'Closest'
+        ob.data.materials.append(mat)
+        context.object.active_material_index=i
+        ops.object.material_slot_assign()
+        ops.uv.cube_project()
+        i += 1
+        face.select = False
+
+    bmesh.update_edit_mesh(me)
     
 
 def delete_all_from_scene():
@@ -338,67 +459,48 @@ def delete_all_from_scene():
             continue
         # remove the image otherwise
         data.images.remove(image)
+     
+     
+def random_bigger_num() -> int:
+    return random.randint(8, 33)
+
+
+def random_smaller_num() -> int:
+    return random.randint(1, 7)
+
+
+def random_smallest_num() -> float:
+    return random.uniform(0, 1)
+
+
+def random_num() -> int:
+    return random.randint(3, 33)
             
             
-def dump(obj, level=0):
-   for attr in dir(obj):
-       if hasattr( obj, "attr" ):
-           print( "obj.%s = %s" % (attr, getattr(obj, attr)))
-       else:
-           print( attr )
+def fitting_function(roundness_threshold: float, color_threshold: float) -> bool:
+    print("Stosunek okrągłości: " + str(roundness_ratio))
+    print("Próg dopasowania okrągłości: " + str(roundness_threshold))
+    
+    dark_ratio = fit_shells / all_shells
+    print("\nStosunek ciemnego koloru korpusu do jasnego: " + str(dark_ratio))
+    print("Próg dopasowania ciemności kolorów: " + str(color_threshold))
+    
+    res = False
+    if roundness_threshold <= roundness_ratio and color_threshold <= dark_ratio:
+        res = True
+    
+    print("\nWynik funkcji dopasowania: " + str(res))
+    return res
 
 
 delete_all_from_scene()
 
-generate_corpus(15, 11, 3)
+generate_corpus(random_bigger_num(), random_bigger_num(), random_smaller_num())
 generate_eyes()
-generate_tail(4, 4, 2, 0.5)
-generate_upper_fin(4, 5, 5)
-generate_side_fins(2, 2, 1)
+generate_tail(random_num(), random_num(), random_smaller_num(), random_smallest_num())
+generate_upper_fin(random_smaller_num(), random_num(), random_smaller_num())
+generate_side_fins(random_smaller_num(), random_smaller_num(), random_smallest_num())
 
+generate_shells("Corpus Mesh")
 
-ops.object.mode_set(mode='OBJECT')
-ops.object.select_all(action='DESELECT')
-
-context.view_layer.objects.active = data.objects["Corpus Mesh"]
-ob = context.object
-me = ob.data
-# nowy mesh
-bm = bmesh.new()
-# wczytanie mesha
-bm.from_mesh(me)
-# podział na więcej ścian
-#bmesh.ops.subdivide_edges(bm,edges=bm.edges,cuts=1,use_grid_fill=True)
-# zapisanie spowrotem
-bm.to_mesh(me)
-me.update()
-
-ops.object.mode_set(mode='EDIT')
-bm = bmesh.from_edit_mesh(me)
-bm.faces.ensure_lookup_table()
-# ustawienie face select mode
-#context.tool_settings.mesh_select_mode = [False, False, True]
-
-i=0
-for face in bm.faces:
-    face.select = True
-    mat = data.materials.new(name="Colour")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
-    texImage.image = rule54_gen()
-    mat.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
-    # uwydatnienie kolorów
-    mat.node_tree.nodes['Image Texture'].projection = 'BOX'
-    mat.node_tree.nodes['Image Texture'].interpolation = 'Closest'
-    ob.data.materials.append(mat)
-    context.object.active_material_index=i
-    ops.object.material_slot_assign()
-    ops.uv.cube_project()
-    i += 1
-    face.select = False
-
-
-
-bmesh.update_edit_mesh(me)
-
+fitting_function(0.3, 0.4)
