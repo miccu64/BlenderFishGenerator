@@ -5,16 +5,18 @@ import numpy as np
 import bmesh
 import copy
 import math
+from typing import List
 
 # dane potrzebne do miejsca generowania innych elementów
 corpus_length = 10.
 corpus_height = 5.
 corpus_width = 5.
+all_materials = []
 
 # dane do funkcji dopasowania
-fit_shells = 0
-all_shells = 0
-roundness_ratio = 0
+fit_shells = {}
+all_shells = {}
+roundness_ratio = {}
 
 
 # reguła 30, reguła 54 - do generowania łusek
@@ -45,51 +47,54 @@ def hsp_is_dark(color) -> bool:
     return hsp <= 127.5
 
 
-def rule54_gen():
+def rule54_gen(name: str):
     global fit_shells, all_shells
-    
+
+    if name not in all_shells:
+        all_shells[name] = 0
+        fit_shells[name] = 0
+
     ops.object.mode_set(mode='EDIT')
     dims = 144
-    all_shells += dims * dims
+    all_shells[name] += dims * dims
     values = np.zeros([dims, dims])
     for x in range(dims):
         values[x][0] = random.randint(0, 1)
 
     for y in range(1, dims):
         for x in range(1, dims - 1):
-            values[x][y] = rule54_find(values[x - 1][y - 1], values[x][y - 1], values[x + 1][y - 1])
+            values[x][y] = rule54_find(
+                values[x - 1][y - 1], values[x][y - 1], values[x + 1][y - 1])
         values[0][y] = rule54_find(0, values[0][y - 1], values[1][y - 1])
-        values[dims - 1][y] = rule54_find(values[dims - 2][y - 1], values[dims - 1][y - 1], 0)
-    
+        values[dims - 1][y] = rule54_find(values[dims - 2]
+                                          [y - 1], values[dims - 1][y - 1], 0)
+
     # trzeba transponować, żeby obrócić zdj o 90 stopni
     values = np.transpose(values)
     pixels = [None] * dims * dims
-    
+
     color1 = [random.random(), random.random(), random.random(), 1]
     color2 = [1-color1[0], 1-color1[1], 1-color1[2], 1]
     color1_dark = hsp_is_dark(color1)
     color2_dark = hsp_is_dark(color2)
-    
+
     for y in range(dims):
         for x in range(dims):
             if values[x][y] == 1:
                 pixels[(x * dims) + y] = color1
                 if color1_dark == True:
-                    fit_shells += 1
+                    fit_shells[name] += 1
             else:
                 pixels[(x * dims) + y] = color2
                 if color2_dark == True:
-                    fit_shells += 1
-                
+                    fit_shells[name] += 1
+
     # spłaszczam listę
     pixels = [item for sublist in pixels for item in sublist]
-    
+
     image = data.images.new("ShellsImage", width=dims, height=dims)
     image.pixels = pixels
-    #image.filepath_raw = "D:/Studia/PWK/temp.png"
-    #image.file_format = 'PNG'
-    #image.save()
-        
+
     return image
 
 
@@ -118,8 +123,6 @@ def solidify(mesh_name: str, width: float):
     ops.mesh.tris_convert_to_quads(
         face_threshold=1.396264, shape_threshold=1.396264)
 
-    # wstawienie scian
-    # iter_range = range(0, 1, 1)
     # for i in iter_range:
     ops.mesh.inset(thickness=0.25, use_relative_offset=True)
 
@@ -131,13 +134,13 @@ def solidify(mesh_name: str, width: float):
 
     subsurf = mesh.modifiers.new(type='SUBSURF', name='Subsurf')
     subsurf.levels = subsurf.render_levels = 3
-    
-    #kolorowanie
+
+    # kolorowanie
     ob = context.active_object
     mat = data.materials.new(name="Colour")
     mat.diffuse_color = [random.random(), random.random(), random.random(), 1]
     ob.data.materials.append(mat)
-    
+
 
 # losowanie typów krawędzi bezier pointsów
 def draw_point_type() -> str:
@@ -148,12 +151,12 @@ def draw_point_type_weighted() -> str:
     return random.choices(['FREE', 'VECTOR', 'ALIGNED', 'AUTO'], weights=(0.2, 0.2, 0.2, 0.4), k=1)[0]
 
 
-def generate_corpus(length: float, height: float, width: float):
+def generate_corpus(length: float, height: float, width: float, name: str) -> str:
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     # ops.curve. subdivide()
     curve = context.active_object
-    curve.name = 'Corpus Curve'
+    curve.name = 'Corpus Curve ' + name
     bez_points = curve.data.splines[0].bezier_points
 
     round_type = 0
@@ -164,10 +167,10 @@ def generate_corpus(length: float, height: float, width: float):
             round_type += 1
         if bez_point.handle_right_type == 'AUTO':
             round_type += 1
-            
+
     # obliczam stosunek okrągłości
     global roundness_ratio
-    roundness_ratio = round_type / 8
+    roundness_ratio[name] = round_type / 8
 
     proportions = random.uniform(1.3, 8.9)
 
@@ -178,8 +181,10 @@ def generate_corpus(length: float, height: float, width: float):
 
     # gora
     bez_points[1].co = Vector((-length / proportions, height / 2, 0.0))
-    bez_points[1].handle_left = Vector((-length / proportions - 1, height / 2, 0.0))
-    bez_points[1].handle_right = Vector((-length / proportions + 1, height / 2, 0.0))
+    bez_points[1].handle_left = Vector(
+        (-length / proportions - 1, height / 2, 0.0))
+    bez_points[1].handle_right = Vector(
+        (-length / proportions + 1, height / 2, 0.0))
 
     # poczatek ogona
     bez_points[2].co = Vector((0.0, 0.0, 0.0))
@@ -188,10 +193,13 @@ def generate_corpus(length: float, height: float, width: float):
 
     # dolny
     bez_points[3].co = Vector((-length / proportions, -height / 2, 0.0))
-    bez_points[3].handle_left = Vector((-length / proportions + 1, -height / 2, 0.0))
-    bez_points[3].handle_right = Vector((-length / proportions - 1, -height / 2, 0.0))
+    bez_points[3].handle_left = Vector(
+        (-length / proportions + 1, -height / 2, 0.0))
+    bez_points[3].handle_right = Vector(
+        (-length / proportions - 1, -height / 2, 0.0))
 
-    solidify('Corpus Mesh', width)
+    name = 'Corpus Mesh ' + name
+    solidify(name, width)
     obj = context.active_object
 
     # dostęp do nadpisania zmiennych globalnych
@@ -200,16 +208,18 @@ def generate_corpus(length: float, height: float, width: float):
     corpus_height = height / 2
     corpus_width = width / 2
 
+    return name
 
-def generate_tail(length: float, height: float, width: float, indentation: float):
+
+def generate_tail(length: float, height: float, width: float, indentation: float, name: str) -> str:
     global corpus_width
     if corpus_width < width:
         width = corpus_width
-        
+
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
-    curve.name = 'Tail Curve'
+    curve.name = 'Tail Curve ' + name
     bez_points = curve.data.splines[0].bezier_points
 
     for bez_point in bez_points:
@@ -239,59 +249,76 @@ def generate_tail(length: float, height: float, width: float, indentation: float
     bez_points[3].handle_left = Vector((length, -height / 2 + 1, twist))
     bez_points[3].handle_right = Vector((length, -height / 2 - 1, twist))
 
-    solidify('Tail Mesh', width)
+    name = 'Tail Mesh ' + name
+    solidify(name, width)
+
+    return name
 
 
-def generate_upper_fin(length: float, height: float, width: float):
+def generate_upper_fin(length: float, height: float, width: float, name: str) -> str:
     global corpus_width, corpus_height
     if corpus_width < width:
         width = corpus_width - 2
     if corpus_height > height:
         height = corpus_height + 2
-    
 
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
-    curve.name = 'Upper Fin Curve'
+    curve.name = 'Upper Fin Curve ' + name
     bez_points = curve.data.splines[0].bezier_points
 
     for bez_point in bez_points:
         bez_point.handle_left_type = draw_point_type()
         bez_point.handle_right_type = draw_point_type()
 
-    most_left_point_x = random.uniform(-2 * corpus_length / 3, -corpus_length / 4)
+    most_left_point_x = random.uniform(-2 *
+                                       corpus_length / 3, -corpus_length / 4)
 
     # lewy dolny
     bez_points[0].co = Vector((most_left_point_x, corpus_height / 2, 0.0))
-    bez_points[0].handle_left = Vector((most_left_point_x - 1, corpus_height / 2, 0.0))
-    bez_points[0].handle_right = Vector((most_left_point_x + 1, corpus_height / 2, 0.0))
+    bez_points[0].handle_left = Vector(
+        (most_left_point_x - 1, corpus_height / 2, 0.0))
+    bez_points[0].handle_right = Vector(
+        (most_left_point_x + 1, corpus_height / 2, 0.0))
 
     # prawy dolny
-    bez_points[1].co = Vector((most_left_point_x + length, corpus_height / 2, 0.0))
-    bez_points[1].handle_left = Vector((most_left_point_x + length, corpus_height / 2 - 1, 0.0))
-    bez_points[1].handle_right = Vector((most_left_point_x + length, corpus_height / 2 + 1, 0.0))
+    bez_points[1].co = Vector(
+        (most_left_point_x + length, corpus_height / 2, 0.0))
+    bez_points[1].handle_left = Vector(
+        (most_left_point_x + length, corpus_height / 2 - 1, 0.0))
+    bez_points[1].handle_right = Vector(
+        (most_left_point_x + length, corpus_height / 2 + 1, 0.0))
 
     # prawy górny
     twist = random.uniform(-length / 3, length / 3)
-    bez_points[2].co = Vector((most_left_point_x + length, corpus_height / 2 + height, twist))
-    bez_points[2].handle_left = Vector((most_left_point_x + length, corpus_height / 2 + height, twist))
-    bez_points[2].handle_right = Vector((most_left_point_x + length, corpus_height / 2 + height, twist))
+    bez_points[2].co = Vector(
+        (most_left_point_x + length, corpus_height / 2 + height, twist))
+    bez_points[2].handle_left = Vector(
+        (most_left_point_x + length, corpus_height / 2 + height, twist))
+    bez_points[2].handle_right = Vector(
+        (most_left_point_x + length, corpus_height / 2 + height, twist))
 
     # lewy górny
     twist = random.uniform(-length / 3, length / 3)
-    bez_points[3].co = Vector((most_left_point_x, corpus_height / 2 + height / 2, twist))
-    bez_points[3].handle_left = Vector((most_left_point_x, corpus_height / 2 + height / 2, twist))
-    bez_points[3].handle_right = Vector((most_left_point_x, corpus_height / 2 + height / 2, twist))
+    bez_points[3].co = Vector(
+        (most_left_point_x, corpus_height / 2 + height / 2, twist))
+    bez_points[3].handle_left = Vector(
+        (most_left_point_x, corpus_height / 2 + height / 2, twist))
+    bez_points[3].handle_right = Vector(
+        (most_left_point_x, corpus_height / 2 + height / 2, twist))
 
-    solidify('Upper Fin Mesh', width)
-    
-    
-def generate_eyes():
+    name = 'Upper Fin Mesh ' + name
+    solidify(name, width)
+
+    return name
+
+
+def generate_eyes(name: str) -> str:
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
-    curve.name = 'Eyes Curve'
+    curve.name = 'Eyes Curve ' + name
     bez_points = curve.data.splines[0].bezier_points
 
     for bez_point in bez_points:
@@ -321,18 +348,21 @@ def generate_eyes():
     bez_points[3].handle_right = Vector((x_center - 1, y_center - 1, 0.0))
 
     global corpus_width
-    solidify('Eyes Mesh', corpus_width + 4)
+    name = 'Eyes Mesh ' + name
+    solidify(name, corpus_width + 4)
+
+    return name
 
 
-def generate_side_fins(length: float, height: float, width: float):
+def generate_side_fins(length: float, height: float, width: float, name: str) -> List[str]:
     global corpus_width
     if corpus_width > height:
         height = corpus_width + 2
-        
+
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
-    curve.name = 'Left Fin Curve'
+    curve.name = 'Left Fin Curve ' + name
     bez_points = curve.data.splines[0].bezier_points
 
     for bez_point in bez_points:
@@ -371,28 +401,34 @@ def generate_side_fins(length: float, height: float, width: float):
         vectors.append(copy.copy(bez_point.co))
         vectors.append(copy.copy(bez_point.handle_left))
         vectors.append(copy.copy(bez_point.handle_right))
-    
-    solidify('Left Fin Mesh', width)
-    
+
+    name1 = 'Left Fin Mesh ' + name
+    solidify(name1, width)
+
     # utworzenie krzywej
     ops.curve.primitive_bezier_circle_add(enter_editmode=True)
     curve = context.active_object
-    curve.name = 'Right Fin Curve'
+    curve.name = 'Right Fin Curve ' + name
     mirrored_bez_points = curve.data.splines[0].bezier_points
-    
+
     for p in range(len(mirrored_bez_points)):
         mirrored_bez_points[p].handle_left_type = 'AUTO'
         mirrored_bez_points[p].handle_right_type = 'AUTO'
         point = vectors[p * 3]
         mirrored_bez_points[p].co = Vector((point.x, point.y, -point.z))
         point = vectors[p * 3 + 1]
-        mirrored_bez_points[p].handle_left = Vector((point.x, point.y, -point.z))
+        mirrored_bez_points[p].handle_left = Vector(
+            (point.x, point.y, -point.z))
         point = vectors[p * 3 + 2]
-        mirrored_bez_points[p].handle_right = Vector((point.x, point.y, -point.z))
+        mirrored_bez_points[p].handle_right = Vector(
+            (point.x, point.y, -point.z))
 
-    solidify('Right Fin Mesh', width)
-    
-    
+    name2 = 'Right Fin Mesh ' + name
+    solidify(name2, width)
+
+    return [name1, name2]
+
+
 def generate_shells(mesh_name: str):
     ops.object.mode_set(mode='OBJECT')
     ops.object.select_all(action='DESELECT')
@@ -404,8 +440,6 @@ def generate_shells(mesh_name: str):
     bm = bmesh.new()
     # wczytanie mesha
     bm.from_mesh(me)
-    # podział na więcej ścian
-    #bmesh.ops.subdivide_edges(bm,edges=bm.edges,cuts=1,use_grid_fill=True)
     # zapisanie spowrotem
     bm.to_mesh(me)
     me.update()
@@ -413,42 +447,45 @@ def generate_shells(mesh_name: str):
     ops.object.mode_set(mode='EDIT')
     bm = bmesh.from_edit_mesh(me)
     bm.faces.ensure_lookup_table()
-    # ustawienie face select mode
-    #context.tool_settings.mesh_select_mode = [False, False, True]
 
-    i=0
+    i = 1
     for face in bm.faces:
         face.select = True
         mat = data.materials.new(name="Colour")
         mat.use_nodes = True
         bsdf = mat.node_tree.nodes["Principled BSDF"]
         texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')
-        texImage.image = rule54_gen()
-        mat.node_tree.links.new(bsdf.inputs['Base Color'], texImage.outputs['Color'])
+        texImage.image = rule54_gen(mesh_name + str(i))
+        mat.node_tree.links.new(
+            bsdf.inputs['Base Color'], texImage.outputs['Color'])
         # uwydatnienie kolorów
         mat.node_tree.nodes['Image Texture'].projection = 'BOX'
         mat.node_tree.nodes['Image Texture'].interpolation = 'Closest'
         ob.data.materials.append(mat)
-        context.object.active_material_index=i
+        all_materials.append(mat)
+        context.object.active_material_index = i
         ops.object.material_slot_assign()
         ops.uv.cube_project()
         i += 1
         face.select = False
 
     bmesh.update_edit_mesh(me)
-    
+
 
 def delete_all_from_scene():
-    # Select objects by type
-    ops.object.mode_set(mode='OBJECT')
-    for o in context.scene.objects:
-        if o.type == 'MESH':
-            o.select_set(True)
-        else:
-            o.select_set(False)
-    # Call the operator only once
-    ops.object.delete()
-    
+    try:
+        # Select objects by type
+        ops.object.mode_set(mode='OBJECT')
+        for o in context.scene.objects:
+            if o.type == 'MESH':
+                o.select_set(True)
+            else:
+                o.select_set(False)
+        # Call the operator only once
+        ops.object.delete()
+    except:
+        print("Nie usunieto elementow")
+
     for bpy_data_iter in (data.objects, data.meshes):
         for id_data in bpy_data_iter:
             bpy_data_iter.remove(id_data)
@@ -459,8 +496,8 @@ def delete_all_from_scene():
             continue
         # remove the image otherwise
         data.images.remove(image)
-     
-     
+
+
 def random_bigger_num() -> int:
     return random.randint(8, 33)
 
@@ -475,32 +512,146 @@ def random_smallest_num() -> float:
 
 def random_num() -> int:
     return random.randint(3, 33)
-            
-            
-def fitting_function(roundness_threshold: float, color_threshold: float) -> bool:
-    print("Stosunek okrągłości: " + str(roundness_ratio))
-    print("Próg dopasowania okrągłości: " + str(roundness_threshold))
-    
-    dark_ratio = fit_shells / all_shells
+
+
+def fitting_function(name: str) -> int:
+    roundness_points = roundness_ratio[name] * 10
+
+    print("Nazwa ryby: " + name)
+    print("Stosunek okrągłości: " + str(roundness_ratio[name]))
+    print("Punkty za okrągłość: " + str(roundness_points))
+
+    sum_fit_shells = 0
+    sum_all_shells = 0
+    for key in fit_shells.keys():
+        sum_fit_shells += fit_shells[key]
+        sum_all_shells += all_shells[key]
+
+    dark_ratio = sum_fit_shells / sum_all_shells
+    color_points = dark_ratio * 2 / 5 * 10
+
     print("\nStosunek ciemnego koloru korpusu do jasnego: " + str(dark_ratio))
-    print("Próg dopasowania ciemności kolorów: " + str(color_threshold))
-    
-    res = False
-    if roundness_threshold <= roundness_ratio and color_threshold <= dark_ratio:
-        res = True
-    
-    print("\nWynik funkcji dopasowania: " + str(res))
-    return res
+    print("Punkty za ciemność kolorów: " + str(color_points))
+    sum_points = int(color_points + roundness_points)
+
+    print("\nWynik funkcji dopasowania: " + str(sum_points) + "\n")
+    return sum_points
+
+
+def move_fish(fish_name: str, vector: Vector):
+    fish = []
+    for obj in context.scene.objects:
+        if fish_name in obj.name:
+            fish.append(obj.name)
+
+    for el in fish:
+        data.objects[el].location = data.objects[el].location + vector
+
+
+def clone_object(name: str, new_name: str):
+    src_obj = data.objects[name]
+    new_obj = src_obj.copy()
+    new_obj.data = src_obj.data.copy()
+    new_obj.animation_data_clear()
+    new_obj.name = name + ' ' + new_name
+    context.collection.objects.link(new_obj)
+
+
+def create_child(child_name: str, vector: Vector):
+    for i in range(len(mother)):
+        if random.choice([True, False]):
+            clone_object(mother[i], child_name)
+        else:
+            clone_object(father[i], child_name)
+
+    move_fish(mother_name + ' ' + child_name, Vector((0., -40., 0.)))
+    move_fish(father_name + ' ' + child_name, Vector((0., 40., 0.)))
+    move_fish(mother_name + ' ' + child_name, vector)
+    move_fish(father_name + ' ' + child_name, vector)
+
+    # luski dziecka
+    ops.object.mode_set(mode='OBJECT')
+    ops.object.select_all(action='DESELECT')
+
+    corpus_name = ''
+    for obj in context.scene.objects:
+        if child_name in obj.name and 'Corpus' in obj.name:
+            corpus_name = obj.name
+
+    context.view_layer.objects.active = data.objects[corpus_name]
+    ob = context.object
+    me = ob.data
+    # nowy mesh
+    bm = bmesh.new()
+    # wczytanie mesha
+    bm.from_mesh(me)
+    # podział na więcej ścian - mutacja
+    if random.choice([True, False]):
+        bmesh.ops.subdivide_edges(
+            bm, edges=bm.edges, cuts=1, use_grid_fill=True)
+    # zapisanie spowrotem
+    bm.to_mesh(me)
+    me.update()
+
+    ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(me)
+    bm.faces.ensure_lookup_table()
+
+    ob.data.materials.clear()
+
+    fit_shells[child_name] = 0
+    all_shells[child_name] = 0
+
+    i = 1
+    for face in bm.faces:
+        face.select = True
+        mat = all_materials[random.randint(0, len(all_materials) - 1)]
+        ob.data.materials.append(mat)
+        context.object.active_material_index = i
+        ops.object.material_slot_assign()
+        ops.uv.cube_project()
+        i += 1
+        face.select = False
+
+    bmesh.update_edit_mesh(me)
 
 
 delete_all_from_scene()
 
-generate_corpus(random_bigger_num(), random_bigger_num(), random_smaller_num())
-generate_eyes()
-generate_tail(random_num(), random_num(), random_smaller_num(), random_smallest_num())
-generate_upper_fin(random_smaller_num(), random_num(), random_smaller_num())
-generate_side_fins(random_smaller_num(), random_smaller_num(), random_smallest_num())
 
-generate_shells("Corpus Mesh")
+mother = []
+father = []
 
-fitting_function(0.3, 0.4)
+
+mother_name = 'Mother'
+mother.append(generate_corpus(random_bigger_num(),
+              random_bigger_num(), random_smaller_num(), mother_name))
+mother.append(generate_eyes(mother_name))
+mother.append(generate_tail(random_num(), random_num(),
+              random_smaller_num(), random_smallest_num(), mother_name))
+mother.append(generate_upper_fin(random_smaller_num(),
+              random_num(), random_smaller_num(), mother_name))
+mother += generate_side_fins(random_smaller_num(),
+                             random_smaller_num(), random_smallest_num(), mother_name)
+generate_shells(mother[0])
+fitting_function(mother_name)
+move_fish(mother_name, Vector((0., 40., 0.)))
+
+father_name = 'Father'
+father.append(generate_corpus(random_bigger_num(),
+              random_bigger_num(), random_smaller_num(), father_name))
+father.append(generate_eyes(father_name))
+father.append(generate_tail(random_num(), random_num(),
+              random_smaller_num(), random_smallest_num(), father_name))
+father.append(generate_upper_fin(random_smaller_num(),
+              random_num(), random_smaller_num(), father_name))
+father += generate_side_fins(random_smaller_num(),
+                             random_smaller_num(), random_smallest_num(), father_name)
+generate_shells(father[0])
+fitting_function(father_name)
+move_fish(father_name, Vector((0., -40., 0.)))
+
+child_name1 = '1Child1'
+child_name2 = '2Child2'
+create_child(child_name1, Vector((-60., 0., 0.)))
+create_child(child_name2, Vector((60., 0., 0.)))
